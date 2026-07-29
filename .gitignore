@@ -1,0 +1,35 @@
+# --- environment -----------------------------------------------------------
+.venv/
+env/
+venv/
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- test documents --------------------------------------------------------
+# Every PDF that lives here is either generated or someone else's file:
+#   sample.pdf                 rebuild it with `.venv/bin/python make_sample.py`
+#   AI_SEC_Solution_Brief.pdf  } real vendor/client collateral, kept around to
+#   U-26-*.pdf                 } reproduce bugs - not ours to publish
+*.pdf
+
+# Exports and scratch output, written next to the file being edited.
+*.pdfstudio.tmp
+*.out.pdf
+*-redacted.pdf
+*-flattened.pdf
+/out/
+/exports/
+
+# --- editors / OS ----------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
