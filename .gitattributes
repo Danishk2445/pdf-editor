@@ -1,0 +1,13 @@
+# Keep the launchers usable on a Windows checkout: a bash script with CRLF
+# endings fails with "bad interpreter", and a batch file wants CRLF.
+pdf-studio      text eol=lf
+*.sh            text eol=lf
+pdf-studio.cmd  text eol=crlf
+*.cmd           text eol=crlf
+*.bat           text eol=crlf
+
+*.py            text
+*.md            text
+*.txt           text
+*.pdf           binary
+*.png           binary

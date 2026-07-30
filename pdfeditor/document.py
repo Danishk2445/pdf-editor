@@ -129,14 +129,7 @@ class Document:
             kwargs = dict(incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
 
         if same_file and not kwargs.get("incremental"):
-            # Saving over the open file needs an atomic dance: MuPDF still has
-            # the original mapped, so write beside it and swap.
-            tmp = target + ".pdfstudio.tmp"
-            self.doc.save(tmp, **kwargs)
-            os.replace(tmp, target)
-            data = open(target, "rb").read()
-            self.doc.close()
-            self.doc = fitz.open("pdf", data)
+            self._save_over_self(target, kwargs)
         else:
             self.doc.save(target, **kwargs)
 
@@ -144,6 +137,32 @@ class Document:
         self.dirty = False
         self.revision += 1
         self.notify("document")
+
+    def _save_over_self(self, target: str, kwargs: dict):
+        """Write over the file we have open, by writing beside it and swapping.
+
+        MuPDF keeps the original file open while the document is, so the swap
+        has to happen *after* we let go of it: POSIX will happily replace a file
+        another handle still points at, Windows refuses with a sharing
+        violation.  Reopening from the bytes we just wrote leaves the document
+        memory-backed, holding no handle on the file at all.
+        """
+        tmp = target + ".pdfstudio.tmp"
+        try:
+            self.doc.save(tmp, **kwargs)
+            with open(tmp, "rb") as fh:
+                data = fh.read()
+            self.doc.close()                 # release the handle on target
+            self.doc = fitz.open("pdf", data)
+            os.replace(tmp, target)
+        except Exception:
+            # Either nothing was written yet, or the new content is already
+            # loaded and only the swap failed; drop the scratch file either way.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     def to_bytes(self) -> bytes:
         return self.doc.tobytes(garbage=3, deflate=True)

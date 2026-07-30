@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import glob
 import os
+import shutil
 from dataclasses import dataclass, field
 
 import fitz
 
 DEFAULT_DPI = 300
 DEFAULT_LANGUAGE = "eng"
+TESSDATA_ENV = "TESSDATA_PREFIX"
 
 # Base-14 fonts can only encode Latin-1, and MuPDF quietly writes a middle dot
 # for anything outside it - which would make the layer look fine and extract as
@@ -86,26 +88,77 @@ _NOT_A_LANGUAGE = {"osd", "equ"}
 
 INSTALL_HINT = (
     "Recognition needs Tesseract, which the system installs separately:\n\n"
+    "    Windows   winget install UB-Mannheim.TesseractOCR\n"
     "    Arch      sudo pacman -S tesseract tesseract-data-eng\n"
     "    Debian    sudo apt install tesseract-ocr tesseract-ocr-eng\n"
     "    macOS     brew install tesseract\n\n"
-    "Install it, then restart PDF Studio.")
+    "Install it, then restart PDF Studio.\n\n"
+    "If it is already installed somewhere unusual, point the "
+    "TESSDATA_PREFIX environment variable at the folder holding the "
+    "*.traineddata files.")
 
 
 # ------------------------------------------------------------- availability
+def _has_language_data(path: str | None) -> bool:
+    """True when ``path`` is a directory actually holding language data."""
+    return bool(path) and bool(glob.glob(os.path.join(path, "*.traineddata")))
+
+
+def _tessdata_candidates():
+    """Places Tesseract's language data turns up, best guess first."""
+    env = os.environ.get(TESSDATA_ENV)
+    if env:
+        yield env
+        # TESSDATA_PREFIX has meant the *parent* of tessdata for most of
+        # Tesseract's life, and plenty of installs still set it that way.
+        yield os.path.join(env, "tessdata")
+    # Alongside the binary, which is where the Windows installer puts it and
+    # where a Homebrew or self-built install can end up too.
+    binary = shutil.which("tesseract")
+    if binary:
+        near = os.path.dirname(os.path.abspath(binary))
+        yield os.path.join(near, "tessdata")
+        parent = os.path.dirname(near)
+        yield os.path.join(parent, "share", "tessdata")
+        yield os.path.join(parent, "share", "tesseract-ocr", "tessdata")
+    for base in (r"C:\Program Files\Tesseract-OCR",
+                 r"C:\Program Files (x86)\Tesseract-OCR",
+                 r"C:\Tesseract-OCR"):
+        yield os.path.join(base, "tessdata")
+    for path in ("/usr/share/tessdata", "/usr/local/share/tessdata",
+                 "/usr/share/tesseract-ocr/tessdata",
+                 "/opt/homebrew/share/tessdata"):
+        yield path
+
+
 def tessdata() -> str | None:
     """Directory holding Tesseract's language data, or ``None`` if unavailable.
 
-    MuPDF answers this, so a ``True`` here means the recogniser this editor
-    would actually call is present - not merely that a ``tesseract`` binary is
+    MuPDF is asked first, so a hit here means the recogniser this editor would
+    actually call is present - not merely that a ``tesseract`` binary is
     somewhere on ``PATH``.
+
+    MuPDF only consults ``TESSDATA_PREFIX`` though, and the Windows installer
+    does not set it, which would leave recognition looking unavailable on a
+    machine where it is installed and working.  So when MuPDF comes up empty we
+    go looking, and export what we find for the rest of the process.
+
+    What MuPDF hands back is checked rather than trusted, because it echoes
+    ``TESSDATA_PREFIX`` without looking: a stale or misaimed value would
+    otherwise be reported as a working install and fail later, mid-document.
     """
     try:
-        path = fitz.get_tessdata()
+        found = fitz.get_tessdata()          # False when it cannot find them
     except Exception:
-        return None
-    # MuPDF returns False when it cannot find the data.
-    return path or None
+        found = None
+    if _has_language_data(found):
+        return found
+
+    for candidate in _tessdata_candidates():
+        if _has_language_data(candidate):
+            os.environ[TESSDATA_ENV] = candidate
+            return candidate
+    return None
 
 
 def languages(path: str | None = None) -> list[str]:

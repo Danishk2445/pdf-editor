@@ -25,6 +25,19 @@ python3 -m venv .venv
 ./pdf-studio sample.pdf
 ```
 
+On Windows, same thing with the launcher and paths Windows uses:
+
+```bat
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python make_sample.py
+pdf-studio.cmd sample.pdf
+```
+
+`pdf-studio.cmd` keeps a console window open alongside the app, which is where
+errors go; swap `python.exe` for `pythonw.exe` in it if you would rather it ran
+without one.
+
 `sample.pdf` is a four-page report with real text, an embedded chart, a
 landscape appendix and a working form — handy for trying every tool.
 
@@ -33,10 +46,16 @@ a pip one — everything else comes from `requirements.txt`. Without it the edit
 works as normal and the OCR menu entry explains what to install:
 
 ```bash
+winget install UB-Mannheim.TesseractOCR          # Windows
 sudo pacman -S tesseract tesseract-data-eng      # Arch
 sudo apt install tesseract-ocr tesseract-ocr-eng # Debian/Ubuntu
 brew install tesseract                           # macOS
 ```
+
+You do not need to add it to `PATH` or set `TESSDATA_PREFIX` — the editor looks
+in the usual install locations, including the ones the Windows installer uses,
+and exports what it finds. If you keep the language data somewhere unusual, set
+`TESSDATA_PREFIX` to the folder holding the `*.traineddata` files.
 
 ---
 
