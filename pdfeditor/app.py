@@ -148,6 +148,9 @@ class MainWindow(QMainWindow):
                                lambda: self.search_panel.step(1))
         self.act_find_prev = A("Find &Previous", None, QKeySequence.FindPrevious,
                                lambda: self.search_panel.step(-1))
+        self.act_replace = A("&Replace…", None, QKeySequence.Replace,
+                             self.focus_replace,
+                             "Find text and replace it in the document")
 
         # ---- view
         self.act_zoom_in = A("Zoom &In", "zoom_in", QKeySequence.ZoomIn,
@@ -270,6 +273,7 @@ class MainWindow(QMainWindow):
         m.addAction(self.act_find)
         m.addAction(self.act_find_next)
         m.addAction(self.act_find_prev)
+        m.addAction(self.act_replace)
 
         m = bar.addMenu("&View")
         m.addAction(self.act_zoom_in)
@@ -772,6 +776,7 @@ class MainWindow(QMainWindow):
         has = self.document.is_open
         for a in (self.act_save, self.act_save_as, self.act_export, self.act_print,
                   self.act_properties, self.act_close, self.act_find,
+                  self.act_replace,
                   self.act_insert_dialog, self.act_insert_page,
                   self.act_insert_page_before, self.act_duplicate_page,
                   self.act_rotate_left, self.act_rotate_right,
@@ -861,6 +866,14 @@ class MainWindow(QMainWindow):
         self.nav_dock.setVisible(True)
         self.side_tabs.setCurrentWidget(self.search_panel)
         self.search_panel.focus()
+
+    def focus_replace(self):
+        self.nav_dock.setVisible(True)
+        self.side_tabs.setCurrentWidget(self.search_panel)
+        if self.search_panel.entry.text():
+            self.search_panel.focus_replacement()
+        else:
+            self.search_panel.focus()
 
     # =====================================================================
     # tools
@@ -1545,6 +1558,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+O / Ctrl+S", "Open / Save"),
             ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
             ("Ctrl+F / F3", "Find / Find next"),
+            ("Ctrl+H", "Find and replace"),
             ("Ctrl++ / Ctrl+-", "Zoom in / out"),
             ("Ctrl+1 / Ctrl+0", "Fit width / Fit page"),
             ("Ctrl+scroll", "Zoom at the pointer"),

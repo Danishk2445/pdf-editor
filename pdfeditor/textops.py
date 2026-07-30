@@ -335,41 +335,64 @@ def replace_line(doc: fitz.Document, page: fitz.Page, line: Line, new_text: str,
                  fontname: str | None = None, shrink_to_fit: bool = True,
                  pad: float = 0.6) -> None:
     """Swap the text of one line, keeping position, font, size and colour."""
-    style = line.style
-    new_text = new_text.replace("\n", " ").replace("\r", "")
+    replace_lines(doc, page, [(line, new_text)], color=color, size=size,
+                  fontname=fontname, shrink_to_fit=shrink_to_fit, pad=pad)
 
+
+def replace_lines(doc: fitz.Document, page: fitz.Page,
+                  edits: list[tuple[Line, str]], *, color=None,
+                  size: float | None = None, fontname: str | None = None,
+                  shrink_to_fit: bool = True, pad: float = 0.6) -> None:
+    """Rewrite several lines of one page in a single redaction pass.
+
+    Each line keeps its own position, font, size and colour.  Doing the
+    erasures together is what find-and-replace wants: the content stream is
+    rewritten once for the page instead of once per line.
+    """
+    if not edits:
+        return
+    with unrotated(page):
+        # Erase the old glyphs.  A hair of padding catches antialiased edges
+        # without eating into the neighbouring lines.
+        for line, _new in edits:
+            box = fitz.Rect(line.bbox) + (-pad, -pad, pad, pad)
+            page.add_redact_annot(to_pdf_rect(page, box), fill=False,
+                                  cross_out=False)
+        page.apply_redactions(**_KEEP_ART)
+
+        for line, new_text in edits:
+            _draw_line(doc, page, line, new_text, color=color, size=size,
+                       fontname=fontname, shrink_to_fit=shrink_to_fit)
+
+
+def _draw_line(doc: fitz.Document, page: fitz.Page, line: Line, new_text: str,
+               *, color, size, fontname, shrink_to_fit) -> None:
+    """Lay replacement text over a line whose glyphs are already gone."""
+    new_text = new_text.replace("\n", " ").replace("\r", "")
+    if not new_text.strip():
+        return
+
+    style = line.style
     size = float(size or style.size)
     rgb = color if color is not None else _rgb(style.color)
 
-    # Erase the old glyphs.  A hair of padding catches antialiased edges without
-    # eating into the neighbouring lines.
-    box = fitz.Rect(line.bbox) + (-pad, -pad, pad, pad)
+    if fontname:
+        name, buf = fontname, None
+    else:
+        name, buf = fonts.resolve(doc, page, style.font, style.flags, new_text)
 
-    with unrotated(page):
-        rect = to_pdf_rect(page, box)
-        page.add_redact_annot(rect, fill=False, cross_out=False)
-        page.apply_redactions(**_KEEP_ART)
+    # Keep the replacement inside the space the original occupied.
+    if shrink_to_fit:
+        avail = max(line.bbox.width, 1.0)
+        # A line that already ran to the page edge gets the rest of the page.
+        avail = max(avail, page.rect.width - line.bbox.x0 - 18)
+        width = fonts.text_width(new_text, name, size, buf)
+        if width > avail:
+            size = max(size * 0.55, size * avail / width)
 
-        if not new_text.strip():
-            return
-
-        if fontname:
-            name, buf = fontname, None
-        else:
-            name, buf = fonts.resolve(doc, page, style.font, style.flags, new_text)
-
-        # Keep the replacement inside the space the original occupied.
-        if shrink_to_fit:
-            avail = max(line.bbox.width, 1.0)
-            # A line that already ran to the page edge gets the rest of the page.
-            avail = max(avail, page.rect.width - line.bbox.x0 - 18)
-            width = fonts.text_width(new_text, name, size, buf)
-            if width > avail:
-                size = max(size * 0.55, size * avail / width)
-
-        origin = to_pdf_point(page, fitz.Point(style.origin))
-        page.insert_text(origin, new_text, fontname=name, fontfile=None,
-                         fontsize=size, color=rgb, render_mode=0, overlay=True)
+    origin = to_pdf_point(page, fitz.Point(style.origin))
+    page.insert_text(origin, new_text, fontname=name, fontfile=None,
+                     fontsize=size, color=rgb, render_mode=0, overlay=True)
 
 
 def replace_block(doc: fitz.Document, page: fitz.Page, block: Block,
@@ -445,6 +468,135 @@ class Hit:
     rect: fitz.Rect
     text: str
     context: str
+
+
+@dataclass
+class LineHit:
+    """One occurrence of a search string that sits inside a single line.
+
+    A :class:`Hit` says where a match is on the page; a ``LineHit`` also says
+    which line owns it and where in that line's text it starts, which is what
+    the rewriter needs to put something else in its place.
+    """
+    page: int
+    line: Line
+    start: int              # character offset into line.text
+    length: int
+    rect: fitz.Rect         # box around the matched characters
+
+
+def offsets_of(haystack: str, needle: str, *, case: bool = False) -> list[int]:
+    """Start offsets of every non-overlapping occurrence of ``needle``."""
+    if not needle:
+        return []
+    hay = haystack if case else haystack.lower()
+    key = needle if case else needle.lower()
+    out, pos = [], 0
+    while True:
+        k = hay.find(key, pos)
+        if k < 0:
+            return out
+        out.append(k)
+        pos = k + len(key)
+
+
+def line_hits(pt: PageText, needle: str, *, page: int = 0,
+              case: bool = False) -> list[LineHit]:
+    """Every occurrence of ``needle`` inside a single line of one page.
+
+    Matches that straddle a line break are not reported: lines are rewritten
+    whole and one at a time, so there is nothing sensible to do with them.
+    """
+    out: list[LineHit] = []
+    if not needle:
+        return out
+    for line in pt.lines:
+        for start in offsets_of(line.text, needle, case=case):
+            chars = line.chars[start:start + len(needle)]
+            box = fitz.Rect(chars[0].bbox) if chars else fitz.Rect(line.bbox)
+            for ch in chars[1:]:
+                box |= ch.bbox
+            out.append(LineHit(page, line, start, len(needle), box))
+    return out
+
+
+def line_hit_at(hits: list[LineHit], rect) -> LineHit | None:
+    """The occurrence overlapping ``rect`` most, or ``None`` if none does.
+
+    Ties a rectangle from :func:`search_document` back to something the
+    rewriter can edit.  Overlap is required rather than approximated: replacing
+    a different occurrence than the one the user has highlighted would be worse
+    than declining.
+    """
+    target = fitz.Rect(rect)
+    best, best_area = None, 0.0
+    for hit in hits:
+        overlap = fitz.Rect(hit.rect) & target
+        area = 0.0 if overlap.is_empty else overlap.get_area()
+        if area > best_area:
+            best, best_area = hit, area
+    return best
+
+
+def replace_hits(doc: fitz.Document, page: fitz.Page, hits: list[LineHit],
+                 replacement: str, *, shrink_to_fit: bool = True) -> int:
+    """Swap ``replacement`` in for each hit, returning how many were replaced.
+
+    All hits must belong to ``page``.  Several hits on one line are folded into
+    a single rewrite of that line, and the replacement text is never searched
+    again, so replacing "a" with "aa" terminates.
+    """
+    by_line: dict[int, list[LineHit]] = {}
+    for hit in hits:
+        by_line.setdefault(hit.line.index, []).append(hit)
+
+    edits: list[tuple[Line, str]] = []
+    count = 0
+    for group in by_line.values():
+        line = group[0].line
+        text = line.text
+        # Right to left, so the offsets ahead of each edit stay valid.
+        for hit in sorted(group, key=lambda h: h.start, reverse=True):
+            text = text[:hit.start] + replacement + text[hit.start + hit.length:]
+            count += 1
+        edits.append((line, text))
+
+    replace_lines(doc, page, edits, shrink_to_fit=shrink_to_fit)
+    return count
+
+
+def plan_replacements(doc: fitz.Document, needle: str, *,
+                      case: bool = False) -> list[tuple[int, list[LineHit]]]:
+    """Every replaceable occurrence of ``needle``, grouped by page.
+
+    Planning is separate from applying so a caller can see whether there is
+    anything to do before it opens an undo step.  The hits stay valid while
+    other pages are rewritten - they hold geometry, not live page objects.
+    """
+    plan: list[tuple[int, list[LineHit]]] = []
+    if not needle:
+        return plan
+    for pno in range(doc.page_count):
+        page = doc[pno]
+        try:
+            if not page.search_for(needle):
+                continue                     # cheap page filter
+        except Exception:
+            continue
+        hits = line_hits(PageText(page), needle, page=pno, case=case)
+        if hits:
+            plan.append((pno, hits))
+    return plan
+
+
+def apply_plan(doc: fitz.Document, plan: list[tuple[int, list[LineHit]]],
+               replacement: str, *, shrink_to_fit: bool = True) -> int:
+    """Run a :func:`plan_replacements` plan, returning occurrences replaced."""
+    total = 0
+    for pno, hits in plan:
+        total += replace_hits(doc, doc[pno], hits, replacement,
+                              shrink_to_fit=shrink_to_fit)
+    return total
 
 
 def search_document(doc: fitz.Document, needle: str, *, case: bool = False,

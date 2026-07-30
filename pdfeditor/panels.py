@@ -5,11 +5,11 @@ from __future__ import annotations
 from PySide6.QtCore import (QEvent, QItemSelectionModel, QRectF, QSize, Qt,
                             QTimer, Signal)
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMenu, QPushButton, QSizePolicy, QSlider,
-                               QToolButton, QTreeWidget, QTreeWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
+                               QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton,
+                               QSizePolicy, QSlider, QToolButton, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import icons, textops
 
@@ -336,6 +336,7 @@ class SearchPanel(_Panel):
         self.hits: list[textops.Hit] = []
         self._scan_page = 0
         self._needle = ""
+        self._select_after_scan = 0
 
         top = QWidget()
         v = QVBoxLayout(top)
@@ -352,6 +353,24 @@ class SearchPanel(_Panel):
         find.clicked.connect(self.run)
         row.addWidget(find)
         v.addLayout(row)
+
+        self.replacement = QLineEdit()
+        self.replacement.setPlaceholderText("Replace with…")
+        self.replacement.returnPressed.connect(self.replace_one)
+        v.addWidget(self.replacement)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(5)
+        one = QPushButton("Replace")
+        one.setToolTip("Replace the highlighted result and move to the next")
+        one.clicked.connect(self.replace_one)
+        buttons.addWidget(one)
+        every = QPushButton("Replace all")
+        every.setToolTip("Replace every result in the document (one undo step)")
+        every.clicked.connect(self.replace_all)
+        buttons.addWidget(every)
+        buttons.addStretch(1)
+        v.addLayout(buttons)
 
         opts = QHBoxLayout()
         opts.setSpacing(11)
@@ -380,12 +399,17 @@ class SearchPanel(_Panel):
         self.entry.setFocus()
         self.entry.selectAll()
 
+    def focus_replacement(self):
+        self.replacement.setFocus()
+        self.replacement.selectAll()
+
     def run(self):
         needle = self.entry.text()
         self.clear_marks()
         self.list.clear()
         self.hits = []
         self._needle = needle
+        self._select_after_scan = 0
         if not needle or not self.document.is_open:
             self.count.setText("")
             return
@@ -399,8 +423,8 @@ class SearchPanel(_Panel):
             n = len(self.hits)
             self.count.setText(f"{n} result{'' if n == 1 else 's'}")
             if n:
-                self.window.view.reveal(self.hits[0].page, self.hits[0].rect)
-                self.list.setCurrentRow(0)
+                self.select_hit(min(max(0, self._select_after_scan), n - 1))
+            self._select_after_scan = 0
             return
         for _ in range(4):
             if self._scan_page >= self.document.page_count:
@@ -492,3 +516,89 @@ class SearchPanel(_Panel):
             return
         row = self.list.currentRow()
         self.select_hit((row + delta) % len(self.hits))
+
+    # ----------------------------------------------------------------- replace
+    def replace_one(self):
+        """Rewrite the highlighted result, then land on the next one."""
+        needle = self.entry.text()
+        if not needle or not self.document.is_open:
+            return
+        if needle != self._needle or not self.hits:
+            # Nothing has been found for this text yet, so find it first.
+            self.run()
+            self.window.show_status("Searching — press Replace again")
+            return
+
+        row = max(0, self.list.currentRow())
+        if row >= len(self.hits):
+            return
+        hit = self.hits[row]
+        page_text = self.window.ctx.page_text(hit.page)
+        target = None
+        if page_text is not None:
+            target = textops.line_hit_at(
+                textops.line_hits(page_text, needle, page=hit.page,
+                                  case=self.case.isChecked()), hit.rect)
+        if target is None:
+            # The search engine found it but the line index cannot place it -
+            # a match across a line break, or text this editor cannot rewrite.
+            self.window.show_status(
+                f"Cannot rewrite the result on page {hit.page + 1} "
+                f"— it does not sit inside a single line", 7000)
+            return
+
+        replacement = self.replacement.text()
+        with self.window.ctx.edit(self._label(needle, replacement), page=hit.page):
+            textops.replace_hits(
+                self.document.doc, self.document.page(hit.page), [target],
+                replacement,
+                shrink_to_fit=self.window.ctx.style.shrink_text_to_fit)
+        # The page has been rewritten, so every rectangle on it is stale: scan
+        # again and come back to the same position in the list, which is now
+        # the following result.  Text that contains what was searched for
+        # ("foo" → "foobar") leaves new matches behind at this very spot, so
+        # step past them instead of replacing them again and again.
+        fresh = len(textops.offsets_of(replacement, needle,
+                                       case=self.case.isChecked()))
+        self.run()
+        self._select_after_scan = row + fresh
+
+    def replace_all(self):
+        """Rewrite every result in the document as one undo step."""
+        needle = self.entry.text()
+        if not needle or not self.document.is_open:
+            return
+        replacement = self.replacement.text()
+        doc = self.document.doc
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            plan = textops.plan_replacements(doc, needle,
+                                             case=self.case.isChecked())
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not plan:
+            self.window.show_status(f"Nothing to replace for “{needle}”")
+            self.run()
+            return
+
+        count = 0
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            with self.window.ctx.edit(self._label(needle, replacement)):
+                count = textops.apply_plan(
+                    doc, plan, replacement,
+                    shrink_to_fit=self.window.ctx.style.shrink_text_to_fit)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if count:                    # a failed edit has already reported itself
+            pages = len(plan)
+            self.window.show_status(
+                f"Replaced {count} occurrence{'' if count == 1 else 's'} on "
+                f"{pages} page{'' if pages == 1 else 's'}", 6000)
+        self.run()
+
+    def _label(self, needle: str, replacement: str) -> str:
+        target = f"“{replacement}”" if replacement else "nothing"
+        return f"Replace “{needle}” with {target}"

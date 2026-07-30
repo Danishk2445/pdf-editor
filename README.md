@@ -54,6 +54,29 @@ Images, rules and background tints under the text are left untouched, and
 rotated pages are handled by editing in unrotated space and restoring the
 rotation afterwards.
 
+### Find and replace
+
+The Search tab in the sidebar (`Ctrl+F`) finds text across the document and
+marks every hit on the page. Type into the second box and it becomes a
+find-and-replace (`Ctrl+H` jumps straight there):
+
+| Action | Result |
+| --- | --- |
+| **Replace** | Rewrites the highlighted hit, then lands on the next one. |
+| **Replace all** | Rewrites every hit in the document as one undo step. |
+| Empty replacement box | Deletes the matched text instead. |
+
+Replacements go through the same rewriter as the Edit Text tool, so each hit
+keeps the position, font, size and colour of the line it came from — the whole
+line is re-laid, not patched. `Match case` applies to replacing as well as
+finding. Leaving something that still matches (`cat` → `cats`) is fine:
+Replace steps past what it just wrote instead of chewing through it, and
+Replace all makes one pass.
+
+A page with several hits is erased and re-laid in a single pass, so the hit
+count you press Replace all on is the count you get. The result list refreshes
+afterwards, which is also how you see anything that could not be rewritten.
+
 ### Moving objects around
 
 The **Select** tool (`V`) puts grab handles on annotations, embedded images and
@@ -92,6 +115,7 @@ Edit menu names the step it will reverse.
 | --- | --- |
 | `Ctrl+O` / `Ctrl+S` | Open / Save |
 | `Ctrl+F`, `F3` | Find, find next |
+| `Ctrl+H` | Find and replace |
 | `Ctrl` + scroll | Zoom at the pointer |
 | Space + drag | Pan |
 | `Ctrl+1` / `Ctrl+0` | Fit width / fit page |
@@ -145,6 +169,12 @@ is capped at 40 steps and 512 MB, whichever comes first.
   dominant style of that line; the mix is not preserved.
 - Replacement text does not reflow into following lines. Overflow shrinks to
   fit the original width by default — turn that off in the Properties panel.
+- Find and replace works a line at a time, so a hit split across a line break
+  is found but not replaceable; Replace says which page it gave up on.
+- Some files hold text the redactor cannot lift out — glyphs drawn by a Type3
+  font are the usual case. There the new text lands on top of the old instead
+  of over it. The result list still showing hits after Replace all is the
+  tell-tale, and it is the same limit the Edit Text tool has on those files.
 - A picture that a design tool draws through a Form XObject moves fine, but
   only while that form is used once. Where the same form is stamped down
   several times the copies share one matrix, so the editor declines the move
