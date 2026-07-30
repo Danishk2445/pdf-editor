@@ -1,8 +1,9 @@
 # PDF Studio
 
 An interactive PDF editor in Python — retype text that is already in the file,
-move and resize the things on the page, annotate, redact, reorganise pages and
-fill forms. Built on **PySide6** (Qt 6) and **PyMuPDF**.
+read the text out of scanned pages, move and resize the things on the page,
+annotate, redact, reorganise pages and fill forms. Built on **PySide6** (Qt 6)
+and **PyMuPDF**.
 
 ![tools](https://img.shields.io/badge/tools-21-2f6fd0) ![python](https://img.shields.io/badge/python-3.9%2B-3776ab)
 
@@ -26,6 +27,16 @@ python3 -m venv .venv
 
 `sample.pdf` is a four-page report with real text, an embedded chart, a
 landscape appendix and a working form — handy for trying every tool.
+
+Reading scanned pages needs **Tesseract**, which is a system package rather than
+a pip one — everything else comes from `requirements.txt`. Without it the editor
+works as normal and the OCR menu entry explains what to install:
+
+```bash
+sudo pacman -S tesseract tesseract-data-eng      # Arch
+sudo apt install tesseract-ocr tesseract-ocr-eng # Debian/Ubuntu
+brew install tesseract                           # macOS
+```
 
 ---
 
@@ -76,6 +87,35 @@ Replace all makes one pass.
 A page with several hits is erased and re-laid in a single pass, so the hit
 count you press Replace all on is the count you get. The result list refreshes
 afterwards, which is also how you see anything that could not be rewritten.
+
+### Scanned pages
+
+A page that came from a scanner or a phone holds only a *picture* of its text,
+so none of the above has anything to work on: search finds nothing, Edit Text
+never outlines a line, text export comes back blank. **Pages ▸ Recognise Text
+(OCR)** fixes that — it reads the glyphs out of the image and stores the
+characters invisibly over the ink, so the page looks exactly as it did and is
+now searchable, selectable and editable.
+
+| | |
+| --- | --- |
+| Pages | Which pages to read, as a range. |
+| Language | Whichever Tesseract language data you have installed. |
+| Read at | Resolution to read at. 300 dpi suits most scans; 400+ helps small print, slowly. |
+| Skip pages that already have text | On by default — reading a page twice gives it two copies of every word. |
+
+The whole run is one undo step, and Cancel keeps the pages already done. The
+page is rendered here and handed to the recogniser rather than going through
+MuPDF's own OCR path, which drops the top of a rotated page.
+
+Each word is placed on its own recognised box, at the size the box implies, so
+selection and search highlights land on the ink they belong to — measured
+against pages whose real text is known, word boxes overlap the true ones by 93%
+on average at every page rotation. Typography the base fonts cannot hold is
+folded to a plain equivalent (curly quotes, em dashes, `…`, `ﬁ`), which is also
+what people actually type into the search box; text outside Latin-1 moves to a
+font that covers it, and anything no available font can store is reported rather
+than silently written as a middle dot.
 
 ### Moving objects around
 
@@ -137,6 +177,7 @@ can edit them, then saved as PDF.
 pdfeditor/
   document.py   PyMuPDF document + snapshot undo/redo
   textops.py    line/character index, in-place text rewriting, search
+  ocr.py        recognising scanned pages into an invisible text layer
   pageops.py    page-level operations, watermarks, export, encryption
   imageops.py   moving/removing placed images by rewriting the content stream
   fonts.py      font matching, embedded-font reuse
@@ -175,6 +216,16 @@ is capped at 40 steps and 512 MB, whichever comes first.
   font are the usual case. There the new text lands on top of the old instead
   of over it. The result list still showing hits after Replace all is the
   tell-tale, and it is the same limit the Edit Text tool has on those files.
+- Recognition is only as good as the scan. Clean printed text reads well;
+  handwriting, tight photocopies and heavy skew do not, and no amount of dpi
+  rescues them. Nothing claims otherwise — reread a page and the result list
+  shows you what it found.
+- Editing recognised text lays the new words *over* the scan rather than
+  replacing them, because the visible text is part of a picture and only the
+  invisible layer can be lifted out. Erase or Redact the area first if you need
+  the old words gone.
+- A page that genuinely displays sideways is read sideways, because that is what
+  it looks like. Rotate it upright first, then recognise.
 - A picture that a design tool draws through a Form XObject moves fine, but
   only while that form is used once. Where the same form is stamped down
   several times the copies share one matrix, so the editor declines the move

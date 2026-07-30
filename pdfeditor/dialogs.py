@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QSlider, QSpinBox, QTabWidget, QVBoxLayout,
                                QWidget)
 
-from . import pageops
+from . import ocr, pageops
 
 
 # ============================================================== signature pad
@@ -616,6 +616,70 @@ class TextContentDialog(QDialog):
 
     def text(self) -> str:
         return self.edit.toPlainText()
+
+
+# ======================================================================= ocr
+class OCRDialog(QDialog):
+    """Options for recognising the text in scanned pages."""
+
+    def __init__(self, page_count: int, languages: list[str], *,
+                 untexted: int = 0, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Recognise text")
+        self.setMinimumWidth(430)
+        v = QVBoxLayout(self)
+        v.setSpacing(9)
+
+        blurb = QLabel(
+            "Reads the text out of scanned pages and stores it invisibly over "
+            "the picture, so the page looks the same but can be searched, "
+            "selected and edited.")
+        blurb.setWordWrap(True)
+        v.addWidget(blurb)
+
+        form = QFormLayout()
+        self.pages = QLineEdit(f"1-{page_count}")
+        form.addRow("Pages", self.pages)
+
+        self.language = QComboBox()
+        for code in languages:
+            self.language.addItem(ocr.language_label(code), code)
+        form.addRow("Language", self.language)
+
+        self.dpi = QSpinBox()
+        self.dpi.setRange(72, 600)
+        self.dpi.setSingleStep(50)
+        self.dpi.setValue(ocr.DEFAULT_DPI)
+        self.dpi.setSuffix(" dpi")
+        self.dpi.setToolTip("Resolution the page is read at. Higher is slower; "
+                            "300 suits most scans, 400+ helps small print.")
+        form.addRow("Read at", self.dpi)
+        v.addLayout(form)
+
+        self.skip = QCheckBox("Skip pages that already have text")
+        self.skip.setChecked(True)
+        self.skip.setToolTip("Recognising a page twice gives it two copies of "
+                             "every word.")
+        v.addWidget(self.skip)
+
+        if untexted:
+            note = (f"{untexted} of {page_count} page(s) carry no text and "
+                    f"would gain some.")
+        else:
+            note = ("Every page already carries text - untick the box above to "
+                    "recognise them anyway.")
+        hint = QLabel(f"<span style='color:#69727f'>{note}</span>")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Recognise")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        v.addWidget(buttons)
+
+    def language_code(self) -> str:
+        return self.language.currentData() or ocr.DEFAULT_LANGUAGE
 
 
 # ==================================================================== about

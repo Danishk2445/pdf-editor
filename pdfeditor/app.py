@@ -12,11 +12,12 @@ from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices,
                            QGuiApplication, QIcon, QKeySequence, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget,
                                QFileDialog, QHBoxLayout, QLabel, QMainWindow,
-                               QMenu, QMessageBox, QSizePolicy, QSpinBox,
-                               QStatusBar, QTabWidget, QToolBar, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QMenu, QMessageBox, QProgressDialog,
+                               QSizePolicy, QSpinBox, QStatusBar, QTabWidget,
+                               QToolBar, QToolButton, QVBoxLayout, QWidget)
 
-from . import __version__, dialogs, icons, imageops, pageops, textops, theme
+from . import (__version__, dialogs, icons, imageops, ocr, pageops, textops,
+               theme)
 from .document import Document, PasswordRequired
 from .inspector import Inspector
 from .items import ObjectItem, qrect
@@ -209,6 +210,10 @@ class MainWindow(QMainWindow):
         self.act_flatten = A("&Flatten Annotations", None, None,
                              self.flatten_annotations)
         self.act_resize_pages = A("Resi&ze Pages…", None, None, self.resize_pages)
+        self.act_ocr = A("&Recognise Text (OCR)…", None, None,
+                         self.recognise_text,
+                         "Read the text out of scanned pages so they can be "
+                         "searched and edited")
 
         # ---- protect / forms
         self.act_security = A("Password && &Permissions…", "lock", None,
@@ -312,6 +317,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self.act_extract_pages)
         m.addAction(self.act_export_images)
+        m.addSeparator()
+        m.addAction(self.act_ocr)
         m.addSeparator()
         m.addAction(self.act_page_numbers)
         m.addAction(self.act_watermark)
@@ -783,7 +790,7 @@ class MainWindow(QMainWindow):
                   self.act_extract_pages, self.act_export_images,
                   self.act_page_numbers, self.act_watermark, self.act_flatten,
                   self.act_security, self.act_remove_security,
-                  self.act_resize_pages, self.act_reset_crop,
+                  self.act_resize_pages, self.act_reset_crop, self.act_ocr,
                   self.act_select_all, self.act_copy, self.act_form_flatten,
                   self.act_zoom_in, self.act_zoom_out, self.act_fit_width,
                   self.act_fit_page, self.act_actual):
@@ -1418,6 +1425,73 @@ class MainWindow(QMainWindow):
                         angle=dlg.angle.value(), on_top=dlg.on_top.isChecked())
         except Exception as exc:
             QMessageBox.critical(self, "Watermark failed", str(exc))
+
+    def recognise_text(self):
+        """Give scanned pages an invisible text layer, as one undo step."""
+        if not self.document.is_open:
+            return
+        languages = ocr.languages()
+        if not languages:
+            QMessageBox.information(self, "Recognition unavailable",
+                                    ocr.INSTALL_HINT)
+            return
+
+        total = self.document.page_count
+        dlg = dialogs.OCRDialog(total, languages,
+                                untexted=len(ocr.needs_ocr(self.document.doc)),
+                                parent=self)
+        if not dlg.exec():
+            return
+        pages = dialogs.parse_page_range(dlg.pages.text(), total)
+        if not pages:
+            self.show_status("No pages selected")
+            return
+
+        progress = QProgressDialog("Recognising text…", "Cancel", 0,
+                                   len(pages), self)
+        progress.setWindowTitle("Recognise text")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+
+        def step(done: int, count: int, index: int) -> bool:
+            progress.setMaximum(count)
+            progress.setValue(done)
+            if index >= 0:
+                progress.setLabelText(f"Recognising page {index + 1} of "
+                                      f"{total}…")
+            # Recognition holds the thread for seconds at a time, so let Qt
+            # repaint and notice the Cancel button between pages.
+            QApplication.processEvents()
+            return not progress.wasCanceled()
+
+        outcome = {}
+        try:
+            with self.ctx.edit("Recognise text"):
+                result = ocr.ocr_pages(
+                    self.document.doc, pages, language=dlg.language_code(),
+                    dpi=dlg.dpi.value(),
+                    skip_with_text=dlg.skip.isChecked(), progress=step)
+                outcome["result"] = result
+                if not result.changed:
+                    # Nothing was added, so the run rolls back rather than
+                    # spending an undo step and marking the file dirty.
+                    raise ocr.NothingRecognised(result.summary())
+        finally:
+            progress.close()
+
+        result = outcome.get("result")
+        if result is not None and result.changed:
+            self.show_status(result.summary(), 9000)
+            if result.incomplete:
+                QMessageBox.warning(
+                    self, "Some characters could not be stored",
+                    f"{len(result.incomplete)} page(s) hold characters that "
+                    "none of the fonts available to this editor can store "
+                    f"({result.unstorable[:24]}).\n\nThose words reached the "
+                    "page but will not be found by a search. The rest of the "
+                    "text is fine.")
 
     def flatten_annotations(self):
         if not self.document.is_open:
