@@ -11,10 +11,11 @@ from PySide6.QtCore import (QPoint, QPointF, QRectF, QSettings, QSize, Qt,
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices,
                            QGuiApplication, QIcon, QKeySequence, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget,
-                               QFileDialog, QHBoxLayout, QLabel, QMainWindow,
-                               QMenu, QMessageBox, QProgressDialog,
-                               QSizePolicy, QSpinBox, QStatusBar, QTabWidget,
-                               QToolBar, QToolButton, QVBoxLayout, QWidget)
+                               QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QLayout, QMainWindow, QMenu,
+                               QMessageBox, QProgressDialog, QSizePolicy,
+                               QSpinBox, QStatusBar, QTabWidget, QToolBar,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from . import (__version__, dialogs, icons, imageops, ocr, pageops, textops,
                theme)
@@ -59,6 +60,129 @@ TOOL_RAIL = [
     ("redact", "redact", "Redact an area", None),
     ("crop", "crop", "Crop the page", "C"),
 ]
+
+
+class ToolRail(QWidget):
+    """The tool buttons, in as many columns as the available height needs.
+
+    One column of these wants a window about 935 pixels tall, which a 1080p
+    desktop at 150% scaling cannot give - and a toolbar's own answer to not
+    fitting, tucking the overflow behind a chevron, hides a third of the
+    toolbox where nobody finds it.  So the buttons wrap into more columns
+    instead, and everything stays on screen at any scaling.
+
+    Separators only earn their place in a single column; once the buttons are
+    laid out as a grid the group boundaries read from the arrangement.
+    """
+
+    SEPARATOR_HEIGHT = 9
+    MAX_COLUMNS = 3
+
+    def __init__(self, window, icon_size: QSize, parent=None):
+        super().__init__(parent)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(3, 4, 3, 4)
+        grid.setSpacing(2)
+        grid.setAlignment(Qt.AlignTop)
+        # Without this the layout's minimum size becomes the rail's, and the
+        # rail's becomes the whole window's: a single column of tools was
+        # forcing a minimum window height of 988px, taller than a 150%-scaled
+        # 1080p screen, so the window could never shrink to the point where
+        # wrapping would kick in.  It could only be clipped.
+        grid.setSizeConstraint(QLayout.SetNoConstraint)
+        self._grid = grid
+        self._separators: list[QFrame] = []
+        self._columns = 0
+        self._available = 0
+        # ``None`` marks a separator, so the source order stays readable.
+        self._items: list[QToolButton | None] = []
+        for entry in TOOL_RAIL:
+            if entry is None:
+                self._items.append(None)
+                continue
+            button = QToolButton(self)
+            button.setDefaultAction(window.tool_actions[entry[0]])
+            button.setIconSize(icon_size)
+            button.setAutoRaise(True)
+            self._items.append(button)
+        self._reflow(1)
+
+    def minimumSizeHint(self) -> QSize:
+        """One button's worth, so the rail never dictates the window's height."""
+        buttons = self.buttons
+        if not buttons:
+            return QSize(0, 0)
+        one = buttons[0].sizeHint()
+        margins = self._grid.contentsMargins()
+        return QSize(one.width() + margins.left() + margins.right(),
+                     one.height() + margins.top() + margins.bottom())
+
+    @property
+    def buttons(self) -> list:
+        return [item for item in self._items if item is not None]
+
+    @property
+    def columns(self) -> int:
+        return self._columns
+
+    def set_available_height(self, available: int):
+        """Re-wrap for the vertical room the window can actually spare."""
+        self._available = available
+        wanted = self.columns_for(available)
+        if wanted != self._columns:
+            self._reflow(wanted)
+
+    def columns_for(self, available: int) -> int:
+        """How many columns it takes to fit everything into ``available``."""
+        buttons = self.buttons
+        if not buttons:
+            return 1
+        spacing = self._grid.verticalSpacing()
+        tall = buttons[0].sizeHint().height() + spacing
+        short = self.SEPARATOR_HEIGHT + spacing
+        one_column = sum(tall if item is not None else short
+                         for item in self._items)
+        margins = self._grid.contentsMargins()
+        room = available - margins.top() - margins.bottom()
+        if room <= 0 or one_column <= room:
+            return 1
+        # Separators go away once wrapped, so measure the wrapped case on
+        # buttons alone rather than assuming the single-column height holds.
+        for columns in range(2, self.MAX_COLUMNS + 1):
+            per_column = -(-len(buttons) // columns)
+            if per_column * tall <= room:
+                return columns
+        return self.MAX_COLUMNS
+
+    def _reflow(self, columns: int):
+        grid = self._grid
+        while grid.count():
+            grid.takeAt(0)
+        for frame in self._separators:
+            frame.setParent(None)
+            frame.deleteLater()
+        self._separators = []
+
+        if columns <= 1:
+            for row, item in enumerate(self._items):
+                if item is None:
+                    frame = QFrame(self)
+                    frame.setObjectName("toolRailSeparator")
+                    frame.setFrameShape(QFrame.HLine)
+                    frame.setFixedHeight(self.SEPARATOR_HEIGHT)
+                    self._separators.append(frame)
+                    grid.addWidget(frame, row, 0)
+                else:
+                    item.show()
+                    grid.addWidget(item, row, 0)
+        else:
+            buttons = self.buttons
+            per_column = -(-len(buttons) // columns)
+            for index, button in enumerate(buttons):
+                button.show()
+                grid.addWidget(button, index % per_column, index // per_column)
+        self._columns = columns
+        self.updateGeometry()
 
 
 class MainWindow(QMainWindow):
@@ -385,14 +509,12 @@ class MainWindow(QMainWindow):
         # ---- vertical tool rail
         rail = QToolBar("Tools")
         rail.setObjectName("toolRail")
-        rail.setIconSize(QSize(21, 21))
         rail.setMovable(False)
         rail.setOrientation(Qt.Vertical)
-        for entry in TOOL_RAIL:
-            if entry is None:
-                rail.addSeparator()
-            else:
-                rail.addAction(self.tool_actions[entry[0]])
+        # The buttons live in a widget that re-wraps itself, so the toolbar is
+        # only a holder: its own overflow chevron would hide tools instead.
+        self.tool_buttons = ToolRail(self, QSize(21, 21))
+        rail.addWidget(self.tool_buttons)
         self.addToolBar(Qt.LeftToolBarArea, rail)
         self.tool_rail = rail
 
@@ -503,6 +625,8 @@ class MainWindow(QMainWindow):
             name = action.property("iconName")
             if name:
                 action.setIcon(icons.icon(name, palette.text, 20))
+        # A restyle can change the button metrics the wrapping is measured on.
+        self.fit_tool_rail()
         self.view.viewport().update()
 
     def toggle_theme(self):
@@ -1701,6 +1825,16 @@ class MainWindow(QMainWindow):
         return True
 
     # ---- drag & drop
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_tool_rail()
+
+    def fit_tool_rail(self):
+        """Tell the rail how much vertical room it has, so it can re-wrap."""
+        chrome = (self.menuBar().height() + self.main_toolbar.height() +
+                  self.statusBar().height())
+        self.tool_buttons.set_available_height(max(0, self.height() - chrome))
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()

@@ -185,6 +185,11 @@ Continuous, single-page and facing-page layouts; light and dark themes
 (`Ctrl+Shift+D`). The sidebar carries page thumbnails, bookmarks and search
 results. Drop a file on the window to open it.
 
+The tool rail wraps into two or three columns when the window is too short for
+one, so every tool stays on screen rather than disappearing into an overflow
+chevron — which is what a single column of 21 tools does on a laptop screen, or
+on any display running at 125% or 150% scaling.
+
 Non-PDF inputs (XPS, EPUB, CBZ, PNG, JPEG…) are converted to PDF on open so you
 can edit them, then saved as PDF.
 

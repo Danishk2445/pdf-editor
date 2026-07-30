@@ -124,6 +124,13 @@ QToolBar::separator {{
     width: 1px;
     margin: 5px 7px;
 }}
+/* The tool rail lays its own buttons out so it can wrap, so its group
+   dividers are real frames rather than toolbar separators. */
+QFrame#toolRailSeparator {{
+    border: none;
+    border-top: 1px solid {p.border};
+    margin: 4px 5px;
+}}
 QToolButton {{
     background: transparent;
     border: 1px solid transparent;
